@@ -1,6 +1,8 @@
 use nannou::prelude::*;
 use nannou::noise::*;
 
+const OBSTACLE_RADIUS: f32 = 100.0;
+
 fn main() {
     nannou::app(model)
         .update(update)
@@ -27,31 +29,59 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
-    let mut noise = Perlin::new();
+    let mut noise = OpenSimplex::new();
     noise = noise.set_seed(1);
 
     let r = app.window_rect();
     let scale = 0.01;
+
+    let potential = (0 .. r.w() as usize)
+        .map(|x| {
+            (0 .. r.h() as usize)
+                .map(|y| {
+                    // Step 1: Get raw noise value
+                    let psi = noise.get([x as f64 * scale, y as f64 * scale]);
+
+                    // Step 2: Apply boundary constraint to the potential
+                    let distance = distance(x, y) as f64 - OBSTACLE_RADIUS as f64;
+                    ramp(distance / 100.0) * psi
+                }).collect::<Vec<f64>>()
+        }).collect::<Vec<Vec<f64>>>();
 
     // Create vector field
     let vectors = (0 .. r.w() as usize)
         .map(|x| {
             (0 .. r.h() as usize)
                 .map(|y| {
-                    let offset = 1.1;
-                    let n1 = noise.get([x as f64 * scale, (y as f64 + offset) * scale]);
-                    let n2 = noise.get([x as f64 * scale, (y as f64 - offset) * scale]);
-                    let n3 = noise.get([(x as f64 + offset) * scale, y as f64 * scale]);
-                    let n4 = noise.get([(x as f64 - offset) * scale, y as f64 * scale]);
+                    let h = 1.1;
+                    // ψ(x, y+h) and ψ(x, y-h) for ∂ψ/∂y
+                    let ψ_y_plus  = sample_potential(&potential, x as usize, (y as f64 + h) as usize, r.w() as usize, r.h() as usize);
+                    let ψ_y_minus = sample_potential(&potential, x as usize, (y as f64 - h) as usize, r.w() as usize, r.h() as usize);
 
-                    let u = (n1 - n2) as f32;
-                    let v = (n4 - n3) as f32;
-                    vec2(u, v)
+                    // ψ(x+h, y) and ψ(x-h, y) for ∂ψ/∂x
+                    let ψ_x_plus = sample_potential(&potential, (x as f64 + h) as usize, y as usize, r.w() as usize, r.h() as usize);
+                    let ψ_x_minus = sample_potential(&potential, (x as f64 - h) as usize, y as usize, r.w() as usize, r.h() as usize);
+
+                    // Finite difference approximations
+                    let δψ_δy = (ψ_y_plus - ψ_y_minus) as f32;
+                    let δψ_δx = (ψ_x_plus - ψ_x_minus) as f32;
+
+                    // Stream function: v = (∂ψ/∂y, -∂ψ/∂x)
+                    let v = vec2(δψ_δy, -δψ_δx);
+
+                    if in_obstacle(x, y) {
+                        vec2(0.0, 0.0)
+                    // } else if in_obstacle_buffer_zone(x, y) {
+                    //     let n = normal_vector_of_obstacle(x, y);
+                    //     v - v.dot(n)*n
+                    } else {
+                        v
+                    }
                 }).collect::<Vec<Vec2>>()
         }).collect::<Vec<Vec<Vec2>>>();
 
     // Initialize particle positions
-    let particles = (0 .. 1000)
+    let particles = (0 .. 2000)
         .map(|_| {
             reset_particle(r)
         }).collect::<Vec<Particle>>();
@@ -68,9 +98,10 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         p.pos_prev = p.pos;
         let x = ((p.pos.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize);
         let y = ((p.pos.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize);
-        let uv = model.vectors[x][y] * side * 0.02;
-        p.pos.x += uv.x;
-        p.pos.y += uv.y;
+
+        let velocity = model.vectors[x][y] * side * 0.02;
+        p.pos.x += velocity.x;
+        p.pos.y += velocity.y;
 
         // Reset particle if life exceeded
         if p.life == 0 || is_out_of_bounds(p, r) {
@@ -110,65 +141,23 @@ fn view(app: &App, model: &Model, frame: Frame) {
         }
     }
 
-    // Update and draw particles
+    // Draw particles
     for p in &model.particles {
         draw.line()
             .start(p.pos_prev)
             .end(p.pos)
             .weight(1.0)
-            .color(WHITE);
+            // .color(WHITE);
+            .color(srgba(1.0, 1.0, 1.0, 0.1)); // Very transparent white
 
         draw.ellipse()
             .x_y(p.pos.x, p.pos.y)
             .radius(0.5)
-            .color(WHITE);
+            // .color(WHITE);
+            .color(srgba(1.0, 1.0, 1.0, 0.1)); // Very transparent white
     }
 
     draw.to_frame(app, &frame).unwrap();
-}
-
-fn _dynamic_noise(app: &App, _model: &Model, _frame: Frame) {
-    let draw = app.draw();
-    let r = app.window_rect();
-
-    draw.background().color(BLACK);
-
-    let mut noise = Perlin::new();
-    noise = noise.set_seed(1);
-    let scale = 0.01;
-
-    let time = app.time * 0.1;
-
-    let step = 15;
-    for x in (0 .. r.w() as usize).step_by(step) {
-        for y in (0 .. r.h() as usize).step_by(step) {
-            let side = r.w().min(r.h());
-            let start = vec2(x as f32, y as f32) + r.bottom_left();
-
-            let offset = 100.1;
-            let n1 = noise.get([x as f64 * scale, (y as f64 + offset) * scale, time as f64]);
-            let n2 = noise.get([x as f64 * scale, (y as f64 - offset) * scale, time as f64]);
-            let n3 = noise.get([(x as f64 + offset) * scale, y as f64 * scale, time as f64]);
-            let n4 = noise.get([(x as f64 - offset) * scale, y as f64 * scale, time as f64]);
-
-            let u = (n1 - n2) as f32;
-            let v = (n4 - n3) as f32;
-            let uv = vec2(u as f32, v as f32) * side * 0.02;
-
-            let mut end = start + uv;
-
-            let start_to_mouse = app.mouse.position() - start;
-            if start_to_mouse.length() < 100.0 {
-                let target_mag = start_to_mouse.length().min(side * 0.5);
-                end += start_to_mouse.normalize_or_zero() * (-target_mag * 0.05);
-            }
-
-            draw.line()
-                .weight(1.0)
-                .points(start, end)
-                .rgb(1.0, 1.0, 1.0);
-        }
-    }
 }
 
 fn reset_particle(r: Rect) -> Particle {
@@ -176,13 +165,53 @@ fn reset_particle(r: Rect) -> Particle {
             random_range(r.left(), r.right()),
             random_range(r.bottom(), r.top()),
         );
-    Particle {
-        pos: pos,
-        pos_prev: pos,
-        life: random_range(10, 1000),
+
+    // Convert world coordinates to grid coordinates
+    let grid_x = ((pos.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize);
+    let grid_y = ((pos.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize);
+
+    if !in_obstacle(grid_x as usize, grid_y as usize) {
+        Particle {
+            pos: pos,
+            pos_prev: pos,
+            life: random_range(10, 1000),
+        }
+    } else {
+        reset_particle(r)
     }
 }
 
 fn is_out_of_bounds(p: &Particle, r: Rect) -> bool {
     p.pos.x < r.left() || p.pos.x > r.right() || p.pos.y < r.bottom() || p.pos.y > r.top()
+}
+
+fn in_obstacle(x: usize, y: usize) -> bool {
+    let center: Vec2 = vec2(400.0, 400.0);
+
+    let dist = (vec2(x as f32, y as f32) - center).length();
+    dist <= OBSTACLE_RADIUS
+}
+
+fn distance(x: usize, y: usize) -> f32 {
+    let center: Vec2 = vec2(400.0, 400.0);
+    let pos = vec2(x as f32, y as f32);
+    (pos - center).length()
+}
+
+fn shoreline_distance(x: usize, y: usize) -> f32 {
+    let pos = vec2(x as f32, y as f32);
+    
+    // Example: Wavy shoreline
+    let shore_y = 200.0 + 50.0 * (pos.x * 0.01).sin();
+    pos.y - shore_y  // Positive above shore, negative below
+}
+
+fn ramp(r: f64) -> f64 {
+    if r >= 1.0 { 1.0 }
+    else if r <= -1.0 { -1.0 }
+    else { 15.0/8.0 * r - 10.0/8.0 * r.powi(3) + 3.0/8.0 * r.powi(5) }
+}
+
+fn sample_potential(potential: &Vec<Vec<f64>>, x: usize, y: usize, width: usize, height: usize) -> f64 {
+    potential[x.clamp(0, width - 1)][y.clamp(0, height - 1)]
 }
