@@ -12,7 +12,7 @@ fn main() {
 struct Particle {
     pos: Vec2,
     pos_prev: Vec2,
-    life: usize,
+    life: f32,
 }
 
 struct Model {
@@ -29,11 +29,11 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
-    let mut noise = OpenSimplex::new();
+    let mut noise = Billow::new();
     noise = noise.set_seed(1);
 
     let r = app.window_rect();
-    let scale = 0.01;
+    let scale = 0.005;
 
     let potential = (0 .. r.w() as usize)
         .map(|x| {
@@ -81,7 +81,7 @@ fn model(app: &App) -> Model {
         }).collect::<Vec<Vec<Vec2>>>();
 
     // Initialize particle positions
-    let particles = (0 .. 2000)
+    let particles = (0 .. 500)
         .map(|_| {
             reset_particle(r)
         }).collect::<Vec<Particle>>();
@@ -104,11 +104,11 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         p.pos.y += velocity.y;
 
         // Reset particle if life exceeded
-        if p.life == 0 || is_out_of_bounds(p, r) {
+        if p.life <= -1.0 || is_out_of_bounds(p, r) {
             *p = reset_particle(r);
         }
 
-        p.life -= 1;
+        p.life -= 0.01;
     }
 }
 
@@ -148,13 +148,13 @@ fn view(app: &App, model: &Model, frame: Frame) {
             .end(p.pos)
             .weight(1.0)
             // .color(WHITE);
-            .color(srgba(1.0, 1.0, 1.0, 0.1)); // Very transparent white
+            .color(srgba(1.0, 1.0, 1.0, 1.0 - abs(p.life))); // Very transparent white
 
         draw.ellipse()
             .x_y(p.pos.x, p.pos.y)
             .radius(0.5)
             // .color(WHITE);
-            .color(srgba(1.0, 1.0, 1.0, 0.1)); // Very transparent white
+            .color(srgba(1.0, 1.0, 1.0, 1.0 - abs(p.life))); // Very transparent white
     }
 
     draw.to_frame(app, &frame).unwrap();
@@ -174,7 +174,7 @@ fn reset_particle(r: Rect) -> Particle {
         Particle {
             pos: pos,
             pos_prev: pos,
-            life: random_range(10, 1000),
+            life: 1.0,
         }
     } else {
         reset_particle(r)
@@ -196,14 +196,6 @@ fn distance(x: usize, y: usize) -> f32 {
     let center: Vec2 = vec2(400.0, 400.0);
     let pos = vec2(x as f32, y as f32);
     (pos - center).length()
-}
-
-fn shoreline_distance(x: usize, y: usize) -> f32 {
-    let pos = vec2(x as f32, y as f32);
-    
-    // Example: Wavy shoreline
-    let shore_y = 200.0 + 50.0 * (pos.x * 0.01).sin();
-    pos.y - shore_y  // Positive above shore, negative below
 }
 
 fn ramp(r: f64) -> f64 {
