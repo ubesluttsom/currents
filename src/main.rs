@@ -2,6 +2,7 @@ use nannou::prelude::*;
 use nannou::noise::*;
 
 const OBSTACLE_RADIUS: f32 = 100.0;
+const PARTICLES: usize = 2000;
 
 fn main() {
     nannou::app(model)
@@ -24,12 +25,24 @@ struct Model {
 fn model(app: &App) -> Model {
     let _window = app
         .new_window()
-        .size(800, 800)
+        .size(1000, 1000)
         .view(view)
+        .resized(window_resize)
         .build()
         .unwrap();
 
-    let mut noise = Billow::new();
+    let vectors = generate_vectors(app);
+    let particles = generate_particles(app);
+
+    Model { _window, vectors, particles }
+}
+
+fn window_resize(app: &App, model: &mut Model, _dim: Vec2) {
+    model.vectors = generate_vectors(app);
+}
+
+fn generate_vectors(app: &App) -> Vec<Vec<Vec2>> {
+    let mut noise = Perlin::new();
     noise = noise.set_seed(1);
 
     let r = app.window_rect();
@@ -49,7 +62,7 @@ fn model(app: &App) -> Model {
         }).collect::<Vec<Vec<f64>>>();
 
     // Create vector field
-    let vectors = (0 .. r.w() as usize)
+    (0 .. r.w() as usize)
         .map(|x| {
             (0 .. r.h() as usize)
                 .map(|y| {
@@ -78,15 +91,16 @@ fn model(app: &App) -> Model {
                         v
                     }
                 }).collect::<Vec<Vec2>>()
-        }).collect::<Vec<Vec<Vec2>>>();
+        }).collect::<Vec<Vec<Vec2>>>()
+}
 
+fn generate_particles(app: &App) -> Vec<Particle> {
     // Initialize particle positions
-    let particles = (0 .. 500)
+    let r = app.window_rect();
+    (0 .. PARTICLES)
         .map(|_| {
             reset_particle(r)
-        }).collect::<Vec<Particle>>();
-
-    Model { _window, vectors, particles }
+        }).collect::<Vec<Particle>>()
 }
 
 fn update(app: &App, model: &mut Model, _update: Update) {
@@ -96,8 +110,15 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     // Update particle positions
     for p in &mut model.particles {
         p.pos_prev = p.pos;
-        let x = ((p.pos.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize);
-        let y = ((p.pos.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize);
+        let [x, y] = grid_space(&p.pos, &r);
+
+        // NEW! Check mouse coordiantes
+        let [mouse_x, mouse_y] = grid_space(&vec2(app.mouse.x, app.mouse.y), &r);
+        let radius_vec = vec2(x as f32 - mouse_x as f32, y as f32 - mouse_y as f32);
+        if radius_vec.length() <= OBSTACLE_RADIUS {
+            p.pos.x += radius_vec.x * 0.02;
+            p.pos.y += radius_vec.y * 0.02;
+        }
 
         let velocity = model.vectors[x][y] * side * 0.02;
         p.pos.x += velocity.x;
@@ -119,7 +140,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
     // draw.background().color(BLACK);
     draw.rect()
         .w_h(app.window_rect().w(), app.window_rect().h())
-        .color(srgba(0.0, 0.0, 0.0, 0.05)); // Very transparent black
+        .color(srgba(0.0, 0.0, 0.0, 0.03)); // Very transparent black
 
     // Create quiver field
     if app.elapsed_frames() == 0 {
@@ -129,14 +150,14 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 let side = r.w().min(r.h());
                 let start = vec2(x as f32, y as f32) + r.bottom_left();
 
-                let uv = model.vectors[x][y] * side * 0.02;
+                let uv = model.vectors[x][y] * side * 0.05;
 
                 let end = start + uv;
 
                 draw.line()
                     .weight(1.0)
                     .points(start, end)
-                    .rgb(0.1, 0.1, 0.1);
+                    .rgba(1.0, 0.1, 0.1, 0.5);
             }
         }
     }
@@ -167,10 +188,9 @@ fn reset_particle(r: Rect) -> Particle {
         );
 
     // Convert world coordinates to grid coordinates
-    let grid_x = ((pos.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize);
-    let grid_y = ((pos.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize);
+    let [x, y] = grid_space(&pos, &r);
 
-    if !in_obstacle(grid_x as usize, grid_y as usize) {
+    if !in_obstacle(x as usize, y as usize) {
         Particle {
             pos: pos,
             pos_prev: pos,
@@ -179,6 +199,13 @@ fn reset_particle(r: Rect) -> Particle {
     } else {
         reset_particle(r)
     }
+}
+
+fn grid_space(p: &Vec2, r: &Rect) -> [usize; 2] {
+    [
+        ((p.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize),
+        ((p.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize)
+    ]
 }
 
 fn is_out_of_bounds(p: &Particle, r: Rect) -> bool {
