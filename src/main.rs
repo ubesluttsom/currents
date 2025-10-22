@@ -1,13 +1,10 @@
-use nannou::prelude::*;
 use nannou::noise::*;
+use nannou::prelude::*;
 
-const OBSTACLE_RADIUS: f32 = 100.0;
 const PARTICLES: usize = 2000;
 
 fn main() {
-    nannou::app(model)
-        .update(update)
-        .run();
+    nannou::app(model).update(update).run();
 }
 
 struct Particle {
@@ -18,6 +15,7 @@ struct Particle {
 
 struct Model {
     _window: window::Id,
+    land: Vec<Vec<f64>>,
     vectors: Vec<Vec<Vec2>>,
     particles: Vec<Particle>,
 }
@@ -31,76 +29,121 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
-    let vectors = generate_vectors(app);
-    let particles = generate_particles(app);
+    let land = generate_land(app);
+    let vectors = generate_vectors(app, &land);
+    let particles = generate_particles(app, &land);
 
-    Model { _window, vectors, particles }
+    Model {
+        _window,
+        land,
+        vectors,
+        particles,
+    }
 }
 
 fn window_resize(app: &App, model: &mut Model, _dim: Vec2) {
-    model.vectors = generate_vectors(app);
+    model.land = generate_land(app);
+    model.vectors = generate_vectors(app, &model.land);
 }
 
-fn generate_vectors(app: &App) -> Vec<Vec<Vec2>> {
+fn generate_land(app: &App) -> Vec<Vec<f64>> {
+    let simplex = OpenSimplex::new().set_seed(1);
+    let noise = Clamp::new(&simplex as &dyn NoiseFn<[f64; 2]>).set_bounds(0.0, 1.0);
+
+    let r = app.window_rect();
+    let scale = 0.0015;
+
+    (0..r.w() as usize)
+        .map(|x| {
+            (0..r.h() as usize)
+                .map(|y| noise.get([x as f64 * scale, y as f64 * scale]))
+                .collect::<Vec<f64>>()
+        })
+        .collect::<Vec<Vec<f64>>>()
+}
+
+fn generate_vectors(app: &App, land: &Vec<Vec<f64>>) -> Vec<Vec<Vec2>> {
     let mut noise = Perlin::new();
     noise = noise.set_seed(1);
 
     let r = app.window_rect();
-    let scale = 0.005;
+    let scale = 0.01;
 
-    let potential = (0 .. r.w() as usize)
+    let potential = (0..r.w() as usize)
         .map(|x| {
-            (0 .. r.h() as usize)
+            (0..r.h() as usize)
                 .map(|y| {
                     // Step 1: Get raw noise value
                     let psi = noise.get([x as f64 * scale, y as f64 * scale]);
 
                     // Step 2: Apply boundary constraint to the potential
-                    let distance = distance(x, y) as f64 - OBSTACLE_RADIUS as f64;
-                    ramp(distance / 100.0) * psi
-                }).collect::<Vec<f64>>()
-        }).collect::<Vec<Vec<f64>>>();
+                    let h = land[x][y];
+                    ramp(h) * psi
+                })
+                .collect::<Vec<f64>>()
+        })
+        .collect::<Vec<Vec<f64>>>();
 
     // Create vector field
-    (0 .. r.w() as usize)
+    (0..r.w() as usize)
         .map(|x| {
-            (0 .. r.h() as usize)
+            (0..r.h() as usize)
                 .map(|y| {
-                    let h = 1.1;
-                    // ψ(x, y+h) and ψ(x, y-h) for ∂ψ/∂y
-                    let ψ_y_plus  = sample_potential(&potential, x as usize, (y as f64 + h) as usize, r.w() as usize, r.h() as usize);
-                    let ψ_y_minus = sample_potential(&potential, x as usize, (y as f64 - h) as usize, r.w() as usize, r.h() as usize);
-
-                    // ψ(x+h, y) and ψ(x-h, y) for ∂ψ/∂x
-                    let ψ_x_plus = sample_potential(&potential, (x as f64 + h) as usize, y as usize, r.w() as usize, r.h() as usize);
-                    let ψ_x_minus = sample_potential(&potential, (x as f64 - h) as usize, y as usize, r.w() as usize, r.h() as usize);
-
-                    // Finite difference approximations
-                    let δψ_δy = (ψ_y_plus - ψ_y_minus) as f32;
-                    let δψ_δx = (ψ_x_plus - ψ_x_minus) as f32;
-
-                    // Stream function: v = (∂ψ/∂y, -∂ψ/∂x)
-                    let v = vec2(δψ_δy, -δψ_δx);
-
-                    if in_obstacle(x, y) {
+                    if in_land(land, x, y) {
                         vec2(0.0, 0.0)
-                    // } else if in_obstacle_buffer_zone(x, y) {
-                    //     let n = normal_vector_of_obstacle(x, y);
-                    //     v - v.dot(n)*n
                     } else {
-                        v
+                        let h = 1.1;
+                        // ψ(x, y+h) and ψ(x, y-h) for ∂ψ/∂y
+                        let ψ_y_plus = sample_potential(
+                            &potential,
+                            x as usize,
+                            (y as f64 + h) as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
+                        let ψ_y_minus = sample_potential(
+                            &potential,
+                            x as usize,
+                            (y as f64 - h) as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
+
+                        // ψ(x+h, y) and ψ(x-h, y) for ∂ψ/∂x
+                        let ψ_x_plus = sample_potential(
+                            &potential,
+                            (x as f64 + h) as usize,
+                            y as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
+                        let ψ_x_minus = sample_potential(
+                            &potential,
+                            (x as f64 - h) as usize,
+                            y as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
+
+                        // Finite difference approximations
+                        let δψ_δy = (ψ_y_plus - ψ_y_minus) as f32;
+                        let δψ_δx = (ψ_x_plus - ψ_x_minus) as f32;
+
+                        // Stream function: v = (∂ψ/∂y, -∂ψ/∂x)
+                        vec2(δψ_δy, -δψ_δx)
                     }
-                }).collect::<Vec<Vec2>>()
-        }).collect::<Vec<Vec<Vec2>>>()
+                })
+                .collect::<Vec<Vec2>>()
+        })
+        .collect::<Vec<Vec<Vec2>>>()
 }
 
-fn generate_particles(app: &App) -> Vec<Particle> {
+fn generate_particles(app: &App, land: &Vec<Vec<f64>>) -> Vec<Particle> {
     // Initialize particle positions
     let r = app.window_rect();
-    (0 .. PARTICLES)
-        .map(|_| {
-            reset_particle(r)
-        }).collect::<Vec<Particle>>()
+    (0..PARTICLES)
+        .map(|_| reset_particle(r, land))
+        .collect::<Vec<Particle>>()
 }
 
 fn update(app: &App, model: &mut Model, _update: Update) {
@@ -112,21 +155,13 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         p.pos_prev = p.pos;
         let [x, y] = grid_space(&p.pos, &r);
 
-        // NEW! Check mouse coordiantes
-        let [mouse_x, mouse_y] = grid_space(&vec2(app.mouse.x, app.mouse.y), &r);
-        let radius_vec = vec2(x as f32 - mouse_x as f32, y as f32 - mouse_y as f32);
-        if radius_vec.length() <= OBSTACLE_RADIUS {
-            p.pos.x += radius_vec.x * 0.02;
-            p.pos.y += radius_vec.y * 0.02;
-        }
-
         let velocity = model.vectors[x][y] * side * 0.02;
         p.pos.x += velocity.x;
         p.pos.y += velocity.y;
 
         // Reset particle if life exceeded
         if p.life <= -1.0 || is_out_of_bounds(p, r) {
-            *p = reset_particle(r);
+            *p = reset_particle(r, &model.land);
         }
 
         p.life -= 0.01;
@@ -137,16 +172,15 @@ fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
     let r = app.window_rect();
 
-    // draw.background().color(BLACK);
     draw.rect()
         .w_h(app.window_rect().w(), app.window_rect().h())
-        .color(srgba(0.0, 0.0, 0.0, 0.03)); // Very transparent black
+        .rgba(0.0, 0.0, 0.0, 0.03); // Very transparent black
 
     // Create quiver field
     if app.elapsed_frames() == 0 {
         let step = 15;
-        for x in (0 .. r.w() as usize).step_by(step) {
-            for y in (0 .. r.h() as usize).step_by(step) {
+        for x in (0..r.w() as usize).step_by(step) {
+            for y in (0..r.h() as usize).step_by(step) {
                 let side = r.w().min(r.h());
                 let start = vec2(x as f32, y as f32) + r.bottom_left();
 
@@ -158,6 +192,27 @@ fn view(app: &App, model: &Model, frame: Frame) {
                     .weight(1.0)
                     .points(start, end)
                     .rgba(1.0, 0.1, 0.1, 0.5);
+            }
+        }
+    }
+
+    // Draw land
+    if app.elapsed_frames() == 0 {
+        let step = 8;
+        let dim = vec2(step as f32, step as f32);
+        for x in (0..r.w() as usize).step_by(step) {
+            for y in (0..r.h() as usize).step_by(step) {
+                let pos = vec2(x as f32, y as f32) + r.bottom_left() + dim / 2.0;
+                let h = model.land[x][y] as f32;
+                let above_sea = if h == 0.0 { 0.5 } else { 0.0 };
+                let sea = if h == 0.0 { 0.0 } else { 1.0 - h };
+                let deepest_level = if h == 1.0 { 1.0 } else { 0.0 };
+
+                draw.rect()
+                    .xy(pos)
+                    .wh(dim)
+                    .rgb(deepest_level, above_sea, sea);
+                // draw.text(&format!("{:.2}", h)).xy(pos).color(BLACK);
             }
         }
     }
@@ -181,30 +236,30 @@ fn view(app: &App, model: &Model, frame: Frame) {
     draw.to_frame(app, &frame).unwrap();
 }
 
-fn reset_particle(r: Rect) -> Particle {
+fn reset_particle(r: Rect, land: &Vec<Vec<f64>>) -> Particle {
     let pos = vec2(
-            random_range(r.left(), r.right()),
-            random_range(r.bottom(), r.top()),
-        );
+        random_range(r.left(), r.right()),
+        random_range(r.bottom(), r.top()),
+    );
 
     // Convert world coordinates to grid coordinates
     let [x, y] = grid_space(&pos, &r);
 
-    if !in_obstacle(x as usize, y as usize) {
+    if !in_land(land, x as usize, y as usize) {
         Particle {
             pos: pos,
             pos_prev: pos,
             life: 1.0,
         }
     } else {
-        reset_particle(r)
+        reset_particle(r, land)
     }
 }
 
 fn grid_space(p: &Vec2, r: &Rect) -> [usize; 2] {
     [
         ((p.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize),
-        ((p.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize)
+        ((p.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize),
     ]
 }
 
@@ -212,25 +267,26 @@ fn is_out_of_bounds(p: &Particle, r: Rect) -> bool {
     p.pos.x < r.left() || p.pos.x > r.right() || p.pos.y < r.bottom() || p.pos.y > r.top()
 }
 
-fn in_obstacle(x: usize, y: usize) -> bool {
-    let center: Vec2 = vec2(400.0, 400.0);
-
-    let dist = (vec2(x as f32, y as f32) - center).length();
-    dist <= OBSTACLE_RADIUS
-}
-
-fn distance(x: usize, y: usize) -> f32 {
-    let center: Vec2 = vec2(400.0, 400.0);
-    let pos = vec2(x as f32, y as f32);
-    (pos - center).length()
+fn in_land(land: &Vec<Vec<f64>>, x: usize, y: usize) -> bool {
+    (land[x][y] as f32) <= 0.0
 }
 
 fn ramp(r: f64) -> f64 {
-    if r >= 1.0 { 1.0 }
-    else if r <= -1.0 { -1.0 }
-    else { 15.0/8.0 * r - 10.0/8.0 * r.powi(3) + 3.0/8.0 * r.powi(5) }
+    if r >= 1.0 {
+        1.0
+    } else if r <= -1.0 {
+        -1.0
+    } else {
+        15.0 / 8.0 * r - 10.0 / 8.0 * r.powi(3) + 3.0 / 8.0 * r.powi(5)
+    }
 }
 
-fn sample_potential(potential: &Vec<Vec<f64>>, x: usize, y: usize, width: usize, height: usize) -> f64 {
+fn sample_potential(
+    potential: &Vec<Vec<f64>>,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) -> f64 {
     potential[x.clamp(0, width - 1)][y.clamp(0, height - 1)]
 }
