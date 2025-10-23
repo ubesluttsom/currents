@@ -53,13 +53,65 @@ fn generate_land(app: &App) -> Vec<Vec<f64>> {
     let r = app.window_rect();
     let scale = 0.0015;
 
-    (0..r.w() as usize)
+    let potential = (0..r.w() as usize)
         .map(|x| {
             (0..r.h() as usize)
                 .map(|y| noise.get([x as f64 * scale, y as f64 * scale]))
                 .collect::<Vec<f64>>()
         })
-        .collect::<Vec<Vec<f64>>>()
+        .collect::<Vec<Vec<f64>>>();
+
+    let mut gradient_magnitudes = (0..r.w() as usize)
+        .map(|x| {
+            (0..r.h() as usize)
+                .map(|y| {
+                    let delta = 10.0;
+                    let h_y_plus = sample_potential(
+                        &potential,
+                        x as usize,
+                        (y as f64 + delta) as usize,
+                        r.w() as usize,
+                        r.h() as usize,
+                    );
+                    let h_y_minus = sample_potential(
+                        &potential,
+                        x as usize,
+                        (y as f64 - delta) as usize,
+                        r.w() as usize,
+                        r.h() as usize,
+                    );
+
+                    // h(x+h, y) and h(x-h, y) for ∂h/∂x
+                    let h_x_plus = sample_potential(
+                        &potential,
+                        (x as f64 + delta) as usize,
+                        y as usize,
+                        r.w() as usize,
+                        r.h() as usize,
+                    );
+                    let h_x_minus = sample_potential(
+                        &potential,
+                        (x as f64 - delta) as usize,
+                        y as usize,
+                        r.w() as usize,
+                        r.h() as usize,
+                    );
+
+                    // Finite difference approximations
+                    let δh_δy = (h_y_plus - h_y_minus) as f32;
+                    let δh_δx = (h_x_plus - h_x_minus) as f32;
+
+                    // Magnitute
+                    let scale = 1.0;
+                    (δh_δy.pow(2) as f64 + δh_δx.pow(2) as f64).sqrt() * scale
+                })
+                .collect::<Vec<f64>>()
+        })
+        .collect::<Vec<Vec<f64>>>();
+
+    normalize(&mut gradient_magnitudes);
+
+    gradient_magnitudes
 }
 
 fn generate_vectors(app: &App, land: &Vec<Vec<f64>>) -> Vec<Vec<Vec2>> {
@@ -67,7 +119,7 @@ fn generate_vectors(app: &App, land: &Vec<Vec<f64>>) -> Vec<Vec<Vec2>> {
     noise = noise.set_seed(1);
 
     let r = app.window_rect();
-    let scale = 0.01;
+    let scale = 0.004;
 
     let potential = (0..r.w() as usize)
         .map(|x| {
@@ -289,4 +341,27 @@ fn sample_potential(
     height: usize,
 ) -> f64 {
     potential[x.clamp(0, width - 1)][y.clamp(0, height - 1)]
+}
+
+fn normalize(data: &mut Vec<Vec<f64>>) {
+    let flat_iter = data.iter().flat_map(|row| row.iter());
+
+    let min = flat_iter.clone().fold(f64::INFINITY, |a, &b| a.min(b));
+    let max = flat_iter.fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    let range = max - min;
+    if range == 0.0 {
+        for row in data.iter_mut() {
+            for value in row.iter_mut() {
+                *value = 0.5;
+            }
+        }
+        return;
+    }
+
+    for row in data.iter_mut() {
+        for value in row.iter_mut() {
+            *value = (*value - min) / range;
+        }
+    }
 }
