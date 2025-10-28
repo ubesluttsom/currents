@@ -2,27 +2,28 @@ use nannou::color::Gradient;
 use nannou::noise::*;
 use nannou::prelude::*;
 
-// const PARTICLES: usize = 2000;
-const TIME_DILUTION: f32 = 0.3;
-const LAND_GRID: usize = 8;
-const CONTOUR_GRID: usize = 16;
-const NUMBER_OF_CONTOURS: usize = 12;
+const PARTICLES: usize = 2000;
+const TIME_DILUTION: f32 = 0.05;
+const LAND_GRID: usize = 4;
+const CONTOUR_GRID: usize = 8;
+const NUMBER_OF_CONTOURS: usize = 24;
+const RENDER_PARTICLES: bool = false;
 
 fn main() {
     nannou::app(model).update(update).run();
 }
 
-// struct Particle {
-//     pos: Vec2,
-//     pos_prev: Vec2,
-//     life: f32,
-// }
+struct Particle {
+    pos: Vec2,
+    pos_prev: Vec2,
+    life: f32,
+}
 
 struct Model {
     _window: window::Id,
     land: Vec<Vec<f64>>,
-    // vectors: Vec<Vec<Vec2>>,
-    // particles: Vec<Particle>,
+    vectors: Vec<Vec<Vec2>>,
+    particles: Vec<Particle>,
 }
 
 fn model(app: &App) -> Model {
@@ -35,149 +36,165 @@ fn model(app: &App) -> Model {
         .unwrap();
 
     let land = generate_land(app, 0.0);
-    // let vectors = generate_vectors(app, &land);
-    // let particles = generate_particles(app, &land);
+    let vectors = generate_vectors(app, &land, 0.0);
+    let particles = generate_particles(app, &land);
 
     Model {
         _window,
         land,
-        // vectors,
-        // particles,
+        vectors,
+        particles,
     }
 }
 
 fn window_resize(app: &App, model: &mut Model, _dim: Vec2) {
     model.land = generate_land(app, app.time * TIME_DILUTION);
-    // model.vectors = generate_vectors(app, &model.land);
+    model.vectors = generate_vectors(app, &model.land, app.time * TIME_DILUTION);
 }
 
 fn generate_land(app: &App, t: f32) -> Vec<Vec<f64>> {
-    let simplex = OpenSimplex::new().set_seed(1);
-    // let noise = Clamp::new(&simplex as &dyn NoiseFn<[f64; 2]>).set_bounds(0.0, 1.0);
-    let noise = simplex;
-
     let r = app.window_rect();
-    let scale = 0.005;
+    let simplex = OpenSimplex::new().set_seed(1);
+    let noise = Turbulence::new(&simplex)
+        .set_frequency(1.0)
+        .set_power(3.0 * (app.mouse.y as f64) / (r.h() as f64))
+        .set_roughness(2);
+    // let noise = simplex;
+
+    let scale = 0.007; // * (app.mouse.y as f64) / (r.h() as f64);
 
     (0..r.w() as usize)
         .step_by(LAND_GRID)
         .map(|x| {
             (0..r.h() as usize)
                 .step_by(LAND_GRID)
-                .map(|y| noise.get([x as f64 * scale, y as f64 * scale, t as f64]))
+                .map(|y| {
+                    noise.get([
+                        x as f64 * scale,
+                        y as f64 * scale,
+                        app.mouse.x as f64 * 0.001 + t as f64,
+                    ])
+                })
                 .collect::<Vec<f64>>()
         })
         .collect::<Vec<Vec<f64>>>()
 }
 
-// fn generate_vectors(app: &App, land: &Vec<Vec<f64>>) -> Vec<Vec<Vec2>> {
-//     let mut noise = Perlin::new();
-//     noise = noise.set_seed(1);
+fn generate_vectors(app: &App, land: &Vec<Vec<f64>>, t: f32) -> Vec<Vec<Vec2>> {
+    let mut noise = Perlin::new();
+    noise = noise.set_seed(1);
 
-//     let r = app.window_rect();
-//     let scale = 0.01;
+    let r = app.window_rect();
+    let scale = 0.01;
 
-//     let potential = (0..r.w() as usize)
-//         .map(|x| {
-//             (0..r.h() as usize)
-//                 .map(|y| {
-//                     // Step 1: Get raw noise value
-//                     let psi = noise.get([x as f64 * scale, y as f64 * scale]);
+    let potential = (0..r.w() as usize)
+        .map(|x| {
+            (0..r.h() as usize)
+                .map(|y| {
+                    // Step 1: Get raw noise value
+                    let psi = noise.get([x as f64 * scale, y as f64 * scale, t as f64]);
 
-//                     // Step 2: Apply boundary constraint to the potential
-//                     let h = land[x][y];
-//                     ramp(h) * psi
-//                 })
-//                 .collect::<Vec<f64>>()
-//         })
-//         .collect::<Vec<Vec<f64>>>();
+                    // Step 2: Apply boundary constraint to the potential
+                    let land_x = (x as usize / LAND_GRID).min(land.len() - 1);
+                    let land_y = (y as usize / LAND_GRID).min(land[0].len() - 1);
+                    let h = land[land_x][land_y];
+                    ramp(h) * psi
+                })
+                .collect::<Vec<f64>>()
+        })
+        .collect::<Vec<Vec<f64>>>();
 
-//     // Create vector field
-//     (0..r.w() as usize)
-//         .map(|x| {
-//             (0..r.h() as usize)
-//                 .map(|y| {
-//                     if in_land(land, x, y) {
-//                         vec2(0.0, 0.0)
-//                     } else {
-//                         let h = 1.1;
-//                         // ψ(x, y+h) and ψ(x, y-h) for ∂ψ/∂y
-//                         let ψ_y_plus = sample_potential(
-//                             &potential,
-//                             x as usize,
-//                             (y as f64 + h) as usize,
-//                             r.w() as usize,
-//                             r.h() as usize,
-//                         );
-//                         let ψ_y_minus = sample_potential(
-//                             &potential,
-//                             x as usize,
-//                             (y as f64 - h) as usize,
-//                             r.w() as usize,
-//                             r.h() as usize,
-//                         );
+    // Create vector field
+    (0..r.w() as usize)
+        .map(|x| {
+            (0..r.h() as usize)
+                .map(|y| {
+                    if in_land(land, x, y) {
+                        vec2(0.0, 0.0)
+                    } else {
+                        let h = 1.1;
+                        // ψ(x, y+h) and ψ(x, y-h) for ∂ψ/∂y
+                        let ψ_y_plus = sample_potential(
+                            &potential,
+                            x as usize,
+                            (y as f64 + h) as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
+                        let ψ_y_minus = sample_potential(
+                            &potential,
+                            x as usize,
+                            (y as f64 - h) as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
 
-//                         // ψ(x+h, y) and ψ(x-h, y) for ∂ψ/∂x
-//                         let ψ_x_plus = sample_potential(
-//                             &potential,
-//                             (x as f64 + h) as usize,
-//                             y as usize,
-//                             r.w() as usize,
-//                             r.h() as usize,
-//                         );
-//                         let ψ_x_minus = sample_potential(
-//                             &potential,
-//                             (x as f64 - h) as usize,
-//                             y as usize,
-//                             r.w() as usize,
-//                             r.h() as usize,
-//                         );
+                        // ψ(x+h, y) and ψ(x-h, y) for ∂ψ/∂x
+                        let ψ_x_plus = sample_potential(
+                            &potential,
+                            (x as f64 + h) as usize,
+                            y as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
+                        let ψ_x_minus = sample_potential(
+                            &potential,
+                            (x as f64 - h) as usize,
+                            y as usize,
+                            r.w() as usize,
+                            r.h() as usize,
+                        );
 
-//                         // Finite difference approximations
-//                         let δψ_δy = (ψ_y_plus - ψ_y_minus) as f32;
-//                         let δψ_δx = (ψ_x_plus - ψ_x_minus) as f32;
+                        // Finite difference approximations
+                        let δψ_δy = (ψ_y_plus - ψ_y_minus) as f32;
+                        let δψ_δx = (ψ_x_plus - ψ_x_minus) as f32;
 
-//                         // Stream function: v = (∂ψ/∂y, -∂ψ/∂x)
-//                         vec2(δψ_δy, -δψ_δx)
-//                     }
-//                 })
-//                 .collect::<Vec<Vec2>>()
-//         })
-//         .collect::<Vec<Vec<Vec2>>>()
-// }
+                        // Stream function: v = (∂ψ/∂y, -∂ψ/∂x)
+                        vec2(δψ_δy, -δψ_δx)
+                    }
+                })
+                .collect::<Vec<Vec2>>()
+        })
+        .collect::<Vec<Vec<Vec2>>>()
+}
 
-// fn generate_particles(app: &App, land: &Vec<Vec<f64>>) -> Vec<Particle> {
-//     // Initialize particle positions
-//     let r = app.window_rect();
-//     (0..PARTICLES)
-//         .map(|_| reset_particle(r, land))
-//         .collect::<Vec<Particle>>()
-// }
+fn generate_particles(app: &App, land: &Vec<Vec<f64>>) -> Vec<Particle> {
+    // Initialize particle positions
+    let r = app.window_rect();
+    (0..PARTICLES)
+        .map(|_| reset_particle(r, land))
+        .collect::<Vec<Particle>>()
+}
 
 fn update(app: &App, model: &mut Model, _update: Update) {
-    // let r = app.window_rect();
-    // let side = r.w().min(r.h());
+    let r = app.window_rect();
+    let side = r.w().min(r.h());
 
     // Regenerate land and vectors each frame
     model.land = generate_land(app, app.time * TIME_DILUTION);
-    // model.vectors = generate_vectors(app, &model.land);
 
-    // // Update particle positions
-    // for p in &mut model.particles {
-    //     p.pos_prev = p.pos;
-    //     let [x, y] = grid_space(&p.pos, &r);
+    if !RENDER_PARTICLES {
+        return;
+    };
 
-    //     let velocity = model.vectors[x][y] * side * 0.02;
-    //     p.pos.x += velocity.x;
-    //     p.pos.y += velocity.y;
+    model.vectors = generate_vectors(app, &model.land, app.time * TIME_DILUTION);
 
-    //     // Reset particle if life exceeded
-    //     if p.life <= -1.0 || is_out_of_bounds(p, r) {
-    //         *p = reset_particle(r, &model.land);
-    //     }
+    // Update particle positions
+    for p in &mut model.particles {
+        p.pos_prev = p.pos;
+        let [x, y] = grid_space(&p.pos, &r);
 
-    //     p.life -= 0.01;
-    // }
+        let velocity = model.vectors[x][y] * side * 0.04;
+        p.pos.x += velocity.x;
+        p.pos.y += velocity.y;
+
+        // Reset particle if life exceeded
+        if p.life <= -1.0 || is_out_of_bounds(p, r) {
+            *p = reset_particle(r, &model.land);
+        }
+
+        p.life -= 0.01 * random::<f32>();
+    }
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
@@ -189,10 +206,10 @@ fn view(app: &App, model: &Model, frame: Frame) {
         println!("FPS: {:.1}", app.fps());
     }
 
-    // draw.rect()
-    //     .w_h(app.window_rect().w(), app.window_rect().h())
-    //     .rgba(0.0, 0.0, 0.0, 0.03); // Very transparent black
-    draw.background().color(BLACK);
+    draw.rect()
+        .w_h(app.window_rect().w(), app.window_rect().h())
+        .rgba(0.0, 0.0, 0.0, 0.1); // Very transparent black
+    // draw.background().color(BLACK);
 
     // // Create quiver field
     // if app.elapsed_frames() == 0 {
@@ -246,8 +263,21 @@ fn view(app: &App, model: &Model, frame: Frame) {
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &val| {
             (min.min(val), max.max(val))
         });
-    let gradient = Gradient::new(vec![lin_srgb(0.0, 0.5, 0.0), lin_srgb(0.0, 0.0, 0.5)]);
-    let contours: Vec<(f64, LinSrgb)> = (0..NUMBER_OF_CONTOURS)
+    let gradient = Gradient::new(vec![
+        hsla(
+            (app.time as f32 * TIME_DILUTION).cos(),
+            (app.time as f32 * TIME_DILUTION).cos() * 0.438,
+            0.5,
+            0.1,
+        ),
+        hsla(
+            (app.time as f32 * TIME_DILUTION + 3.14 / 2.0).cos(),
+            0.0,
+            0.0,
+            0.0,
+        ),
+    ]);
+    let contours: Vec<(f64, Hsla)> = (0..NUMBER_OF_CONTOURS)
         .map(|i| {
             (
                 min + (max - min) * i as f64 / (NUMBER_OF_CONTOURS as f64 - 1.0),
@@ -297,26 +327,31 @@ fn view(app: &App, model: &Model, frame: Frame) {
         }
     }
 
-    // Draw particles
-    // for p in &model.particles {
-    //     draw.line()
-    //         .start(p.pos_prev)
-    //         .end(p.pos)
-    //         .weight(1.0)
-    //         // .color(WHITE);
-    //         .color(srgba(1.0, 1.0, 1.0, 1.0 - abs(p.life))); // Very transparent white
+    if !RENDER_PARTICLES {
+        draw.to_frame(app, &frame).unwrap();
+        return;
+    };
 
-    //     draw.ellipse()
-    //         .x_y(p.pos.x, p.pos.y)
-    //         .radius(0.5)
-    //         // .color(WHITE);
-    //         .color(srgba(1.0, 1.0, 1.0, 1.0 - abs(p.life))); // Very transparent white
-    // }
+    // Draw particles
+    for p in &model.particles {
+        draw.line()
+            .start(p.pos_prev)
+            .end(p.pos)
+            .weight(1.0)
+            // .color(WHITE);
+            .color(srgba(1.0, 1.0, 1.0, 1.0 - abs(p.life))); // Very transparent white
+
+        draw.ellipse()
+            .x_y(p.pos.x, p.pos.y)
+            .radius(0.5)
+            // .color(WHITE);
+            .color(srgba(1.0, 1.0, 1.0, 1.0 - abs(p.life))); // Very transparent white
+    }
 
     draw.to_frame(app, &frame).unwrap();
 }
 
-fn draw_contour(draw: &Draw, c: f64, s: [(Vec2, f64); 4], color: LinSrgb, r: &Rect) {
+fn draw_contour(draw: &Draw, c: f64, s: [(Vec2, f64); 4], color: Hsla, r: &Rect) {
     // Convert to binary index (0-15)
     let bits = s.map(|(_, h)| h >= c);
     let idx =
@@ -345,8 +380,8 @@ fn draw_contour(draw: &Draw, c: f64, s: [(Vec2, f64); 4], color: LinSrgb, r: &Re
         draw.line()
             .start(start + r.bottom_left())
             .end(end + r.bottom_left())
-            .weight(1.0)
-            .color(BLACK);
+            .weight(2.0)
+            .color(color);
     };
 
     match idx {
@@ -373,6 +408,8 @@ fn draw_contour(draw: &Draw, c: f64, s: [(Vec2, f64); 4], color: LinSrgb, r: &Re
         14 => line(left, bottom),
         _ => {}
     };
+
+    return;
 
     // Fill the region where height >= c with color
     let offset = r.bottom_left();
@@ -527,42 +564,44 @@ fn draw_contour(draw: &Draw, c: f64, s: [(Vec2, f64); 4], color: LinSrgb, r: &Re
     };
 }
 
-// fn reset_particle(r: Rect, land: &Vec<Vec<f64>>) -> Particle {
-//     let pos = vec2(
-//         random_range(r.left(), r.right()),
-//         random_range(r.bottom(), r.top()),
-//     );
+fn reset_particle(r: Rect, land: &Vec<Vec<f64>>) -> Particle {
+    let pos = vec2(
+        random_range(r.left(), r.right()),
+        random_range(r.bottom(), r.top()),
+    );
 
-//     // Convert world coordinates to grid coordinates
-//     let [x, y] = grid_space(&pos, &r);
+    // Convert world coordinates to grid coordinates
+    let [x, y] = grid_space(&pos, &r);
 
-//     if !in_land(land, x as usize, y as usize) {
-//         Particle {
-//             pos: pos,
-//             pos_prev: pos,
-//             life: 1.0,
-//         }
-//     } else {
-//         reset_particle(r, land)
-//     }
-// }
+    if !in_land(land, x as usize, y as usize) {
+        Particle {
+            pos: pos,
+            pos_prev: pos,
+            life: 1.0,
+        }
+    } else {
+        reset_particle(r, land)
+    }
+}
 
-fn _grid_space(p: &Vec2, r: &Rect) -> [usize; 2] {
+fn grid_space(p: &Vec2, r: &Rect) -> [usize; 2] {
     [
         ((p.x - r.left()) as usize).clamp(0, (r.w() - 1.0) as usize),
         ((p.y - r.bottom()) as usize).clamp(0, (r.h() - 1.0) as usize),
     ]
 }
 
-// fn is_out_of_bounds(p: &Particle, r: Rect) -> bool {
-//     p.pos.x < r.left() || p.pos.x > r.right() || p.pos.y < r.bottom() || p.pos.y > r.top()
-// }
-
-fn _in_land(land: &Vec<Vec<f64>>, x: usize, y: usize) -> bool {
-    (land[x][y] as f32) <= 0.0
+fn is_out_of_bounds(p: &Particle, r: Rect) -> bool {
+    p.pos.x < r.left() || p.pos.x > r.right() || p.pos.y < r.bottom() || p.pos.y > r.top()
 }
 
-fn _ramp(r: f64) -> f64 {
+fn in_land(land: &Vec<Vec<f64>>, x: usize, y: usize) -> bool {
+    let land_x = (x / LAND_GRID).min(land.len() - 1);
+    let land_y = (y / LAND_GRID).min(land[0].len() - 1);
+    (land[land_x][land_y] as f32) <= 0.0
+}
+
+fn ramp(r: f64) -> f64 {
     if r >= 1.0 {
         1.0
     } else if r <= -1.0 {
@@ -572,7 +611,7 @@ fn _ramp(r: f64) -> f64 {
     }
 }
 
-fn _sample_potential(
+fn sample_potential(
     potential: &Vec<Vec<f64>>,
     x: usize,
     y: usize,
