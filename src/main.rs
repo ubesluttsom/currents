@@ -159,8 +159,8 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         p.pos.x += velocity.x;
         p.pos.y += velocity.y;
 
-        // Reset particle if life exceeded
-        if p.life <= -1.0 || is_out_of_bounds(p, r) {
+        // Reset particle, maybe
+        if random_range::<f32>(0.0, 1.0) < 0.01 || is_out_of_bounds(p, r) {
             *p = reset_particle(r, &model.land);
         }
 
